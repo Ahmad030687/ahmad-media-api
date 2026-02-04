@@ -7,79 +7,77 @@ import base64
 app = Flask(__name__)
 
 # ---------------------------------------------------------
-# 🛠️ BYPASS ENGINE: Fixed Search & Extraction
+# 🌍 UNIVERSAL ENGINE (Supports All Platforms)
 # ---------------------------------------------------------
-def get_yt_data(query, m_type):
-    # Search logic: Link hai ya keyword, dono handle honge
-    search_query = f"ytsearch1:{query}" if not query.startswith("http") else query
-    
+def get_universal_data(query, m_type):
+    # 1. Logic: Agar Link nahi hai, to YouTube Search samjho
+    if not query.startswith("http"):
+        query = f"ytsearch1:{query}"
+
+    # 2. Universal Options
     ydl_opts = {
-        'format': 'bestaudio/best' if m_type == 'audio' else 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'format': 'bestaudio/best' if m_type == 'audio' else 'best', # Universal format
         'quiet': True,
         'no_warnings': True,
         'geo_bypass': True,
         'nocheckcertificate': True,
-        'extract_flat': False,
-        'skip_download': True,
-        # 📱 Mobile Identity (YouTube isay block nahi karta)
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android_vr', 'ios', 'mweb'],
-                'player_skip': ['webpage', 'configs']
-            }
-        },
+        # 📱 User Agent (Mobile ban kar request bhejna)
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
+        },
+        # 🛡️ Special Tweaks
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios'], # YouTube ke liye
+                'player_skip': ['webpage', 'configs']
+            },
+            'tiktok': {
+                'app_version': ['30.0.0'] # TikTok ke liye
+            }
         }
     }
     
+    # 3. Extraction
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(search_query, download=False)
+            info = ydl.extract_info(query, download=False)
             
-            # 🛡️ INDEX FIX: Check agar search mein koi results aaye hain ya nahi
+            # Agar Search Results hon (YouTube)
             if 'entries' in info:
-                if not info['entries']:
-                    return None # No results found
-                video_data = info['entries'][0]
-            else:
-                video_data = info
-
+                if not info['entries']: return None
+                info = info['entries'][0]
+            
+            # Title aur URL nikalna
             return {
-                "url": video_data.get('url'),
-                "title": video_data.get('title', 'Ahmad RDX Media'),
-                "duration": video_data.get('duration_string', '0:00')
+                "url": info.get('url'),
+                "title": info.get('title', 'Social Media Video'),
+                "duration": info.get('duration_string', '')
             }
     except Exception as e:
-        print(f"Extraction Error: {str(e)}")
+        print(f"Error: {e}")
         return None
 
 # ---------------------------------------------------------
-# 🎵 ROUTES
+# 🚀 API ROUTES
 # ---------------------------------------------------------
 @app.route('/')
 def home():
-    return "🦅 AHMAD RDX - KOYEB ENGINE FIXED & LIVE"
+    return "🦅 AHMAD RDX - UNIVERSAL MEDIA API LIVE"
 
 @app.route('/music-dl')
 def music_dl():
     query = request.args.get('q')
     m_type = request.args.get('type', default='audio')
     
-    if not query: 
-        return jsonify({"status": False, "msg": "Search query missing!"})
+    if not query: return jsonify({"status": False, "msg": "Link ya naam likhein!"})
 
     try:
-        data = get_yt_data(query, m_type)
+        data = get_universal_data(query, m_type)
         
-        # Agar data khali hai (Index Fix)
         if not data:
-            return jsonify({
-                "status": False, 
-                "msg": "Nahi mila! Gane ka sahi naam likhein ya link dein."
-            })
-        
-        # Stream link ko safe banane ke liye Base64
+            return jsonify({"status": False, "msg": "Media nahi mila ya Private hai."})
+
+        # Proxy Token
         token = base64.b64encode(data['url'].encode('ascii')).decode('ascii')
         
         return jsonify({
@@ -100,10 +98,13 @@ def proxy_dl():
 
     try:
         target_url = base64.b64decode(token.encode('ascii')).decode('ascii')
-        headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.youtube.com/"}
+        # Instagram/FB ke liye headers zaroori hote hain
+        headers = {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
+            "Referer": "https://www.tiktok.com/" if "tiktok" in target_url else "https://www.instagram.com/"
+        }
 
         def generate():
-            # Chunks mein stream karna taake RAM full na ho
             with requests.get(target_url, headers=headers, stream=True, timeout=600) as r:
                 r.raise_for_status()
                 for chunk in r.iter_content(chunk_size=1024 * 1024):
@@ -115,7 +116,5 @@ def proxy_dl():
         return Response(str(e), status=500)
 
 if __name__ == "__main__":
-    # Koyeb default port 8080
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
-    
