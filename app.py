@@ -1,84 +1,71 @@
 from flask import Flask, request, jsonify, Response
-from ytmusicapi import YTMusic
 import yt_dlp
 import requests
 import os
 import base64
 
 app = Flask(__name__)
-ytmusic = YTMusic()
 
 # ---------------------------------------------------------
-# 🛠️ YOUTUBE SPECIAL ENGINE
+# 🛠️ YOUTUBE ANDROID ENGINE (Search & Download)
 # ---------------------------------------------------------
 def get_youtube_data(query, m_type):
-    video_id = ""
-    title = ""
-    duration = ""
+    # 1. Search Logic:
+    # Agar direct link hai to wahi use karo, warna "ytsearch1:" lagao
+    if query.startswith("http"):
+        search_query = query
+    else:
+        # "ytsearch1:" ka matlab hai pehla result uthao
+        search_query = f"ytsearch1:{query}"
 
-    # STEP 1: Search via YouTube Music API (Bypasses Block)
-    try:
-        if query.startswith("http"):
-            # Agar direct link hai
-            video_id = query.split("v=")[1].split("&")[0] if "v=" in query else query.split("/")[-1]
-            title = "YouTube Link"
-        else:
-            # Agar naam likha hai to Search karo
-            results = ytmusic.search(query, filter="songs")
-            if not results:
-                # Agar songs mein na mile to video search karo
-                results = ytmusic.search(query, filter="videos")
-            
-            if not results:
-                return None
-            
-            first_result = results[0]
-            video_id = first_result['videoId']
-            title = first_result['title']
-            # Artist ka naam bhi saath jornay ke liye
-            if 'artists' in first_result:
-                artist = first_result['artists'][0]['name']
-                title = f"{title} - {artist}"
-                
-    except Exception as e:
-        print(f"Search Error: {e}")
-        return None
-
-    # STEP 2: Extract Link via yt-dlp (Mobile Client)
-    video_url = f"https://www.youtube.com/watch?v={video_id}"
-    
+    # 2. Android Client Settings (Block Proof)
     ydl_opts = {
         'format': 'bestaudio/best' if m_type == 'audio' else 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         'quiet': True,
         'no_warnings': True,
         'geo_bypass': True,
         'nocheckcertificate': True,
+        # 🛡️ Ye setting bot ko "Samsung Android Phone" bana deti hai
         'extractor_args': {
             'youtube': {
                 'player_client': ['android', 'ios'],
                 'player_skip': ['webpage', 'configs']
             }
+        },
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.162 Mobile Safari/537.36 YouTube/17.31.35'
         }
     }
-
+    
+    # 3. Execution
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=False)
+            # Data extract karna
+            info = ydl.extract_info(search_query, download=False)
+            
+            # Agar Search results hon (playlist/search)
+            if 'entries' in info:
+                # Check agar list khali hai
+                if not info['entries']:
+                    return None, "Search results khali hain (Empty List)."
+                info = info['entries'][0]
+            
             return {
                 "url": info.get('url'),
-                "title": info.get('title', title),
+                "title": info.get('title', 'Unknown Title'),
                 "duration": info.get('duration_string', '0:00')
-            }
+            }, None
+
     except Exception as e:
-        print(f"Extraction Error: {e}")
-        return None
+        # Asli error wapis bhejna
+        return None, str(e)
 
 # ---------------------------------------------------------
 # 🚀 API ROUTES
 # ---------------------------------------------------------
 @app.route('/')
 def home():
-    return "🦅 AHMAD RDX - YOUTUBE MUSIC API LIVE"
+    return "🦅 AHMAD RDX - ANDROID API LIVE"
 
 @app.route('/music-dl')
 def music_dl():
@@ -87,12 +74,17 @@ def music_dl():
     
     if not query: return jsonify({"status": False, "msg": "Query missing!"})
 
-    try:
-        data = get_youtube_data(query, m_type)
-        
-        if not data:
-            return jsonify({"status": False, "msg": "Gana nahi mila. Spelling check karein."})
+    # Data fetch karna
+    data, error_msg = get_youtube_data(query, m_type)
+    
+    if not data:
+        # Agar error aaye to user ko dikhana
+        return jsonify({
+            "status": False, 
+            "msg": f"Error: {error_msg}"
+        })
 
+    try:
         # Proxy Token
         token = base64.b64encode(data['url'].encode('ascii')).decode('ascii')
         
@@ -130,4 +122,4 @@ def proxy_dl():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
-            
+    
