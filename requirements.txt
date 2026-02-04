@@ -3,3 +3,4 @@ yt-dlp
 requests
 gunicorn
 duckduckgo_search
+ytmusicapi
