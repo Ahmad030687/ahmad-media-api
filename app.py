@@ -1,5 +1,4 @@
 from flask import Flask, request, jsonify, Response
-import yt_dlp
 import requests
 import os
 import base64
@@ -7,11 +6,10 @@ import base64
 app = Flask(__name__)
 
 # ---------------------------------------------------------
-# 🌍 PIPED API SERVERS (Search Bypass)
+# 🌍 PUBLIC PIPED INSTANCES (High Speed & No Block)
 # ---------------------------------------------------------
-# Ye servers YouTube search karke Video ID dete hain.
-# Hum Koyeb ki IP se search nahi karenge, in se karwayenge.
-PIPED_INSTANCES = [
+# Hum bari bari in servers se data mangenge
+INSTANCES = [
     "https://pipedapi.kavin.rocks",
     "https://api.piped.ot.ax",
     "https://pipedapi.drgns.space",
@@ -19,66 +17,92 @@ PIPED_INSTANCES = [
     "https://api.piped.projectsegfau.lt"
 ]
 
-def search_via_piped(query):
+def get_piped_data(query, m_type):
+    # 1. SEARCH PHASE
+    video_id = ""
+    title = ""
+    used_instance = ""
+
     # Agar direct link hai
-    if query.startswith("http"):
-        return query, "YouTube Link"
-
-    print(f"Searching via Piped: {query}")
+    if "youtube.com" in query or "youtu.be" in query:
+        if "v=" in query:
+            video_id = query.split("v=")[1].split("&")[0]
+        else:
+            video_id = query.split("/")[-1]
+        title = "YouTube Link"
     
-    # Har server ko bari bari try karo
-    for api_url in PIPED_INSTANCES:
+    # Agar search karna hai
+    else:
+        for instance in INSTANCES:
+            try:
+                print(f"Searching on: {instance}")
+                search_url = f"{instance}/search?q={query}&filter=music_songs"
+                res = requests.get(search_url, timeout=4).json()
+                if 'items' in res and res['items']:
+                    video_id = res['items'][0]['url'].split("/watch?v=")[1]
+                    title = res['items'][0]['title']
+                    used_instance = instance # Jo server chala, usi se download bhi karenge
+                    break
+            except:
+                continue
+    
+    if not video_id:
+        return None, "Search failed on all servers."
+
+    # 2. STREAM EXTRACTION PHASE (Without yt-dlp)
+    # Hum usi instance se stream link mangenge
+    target_instances = [used_instance] if used_instance else INSTANCES
+    
+    for instance in target_instances:
         try:
-            # Piped Search API Call
-            search_url = f"{api_url}/search?q={query}&filter=music_songs"
-            res = requests.get(search_url, timeout=5).json()
+            stream_url = f"{instance}/streams/{video_id}"
+            data = requests.get(stream_url, timeout=4).json()
             
-            # Agar items milein
-            if 'items' in res and len(res['items']) > 0:
-                # Pehla result uthao
-                first_video = res['items'][0]
-                video_url = f"https://www.youtube.com/watch?v={first_video['url'].split('/watch?v=')[1]}"
-                title = first_video['title']
-                print(f"Found on {api_url}: {title}")
-                return video_url, title
-        except Exception as e:
-            print(f"Server {api_url} failed: {e}")
-            continue # Agla server try karo
-            
-    return None, None
+            # Title update agar pehle nahi mila
+            if title == "YouTube Link":
+                title = data.get('title', 'Unknown Media')
 
-# ---------------------------------------------------------
-# 🛠️ DOWNLOAD ENGINE (Android Mode)
-# ---------------------------------------------------------
-def get_stream_data(video_url, m_type):
-    ydl_opts = {
-        'format': 'bestaudio/best' if m_type == 'audio' else 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'quiet': True,
-        'geo_bypass': True,
-        'nocheckcertificate': True,
-        # 📱 Android Client (Download ke liye best)
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios'],
-                'player_skip': ['webpage', 'configs']
-            }
-        }
-    }
-    
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(video_url, download=False)
-        return {
-            "url": info.get('url'),
-            "title": info.get('title', 'Media File'),
-            "duration": info.get('duration_string', '0:00')
-        }
+            # Audio ya Video link nikaalna
+            final_url = ""
+            if m_type == 'audio':
+                # Sabse best audio stream dhoondo
+                audio_streams = data.get('audioStreams', [])
+                if audio_streams:
+                    final_url = audio_streams[0]['url'] # Best quality usually first
+            else:
+                # Video stream
+                video_streams = data.get('videoStreams', [])
+                if video_streams:
+                    # Video with sound dhoondna
+                    for v in video_streams:
+                        if v.get('videoOnly') == False:
+                            final_url = v['url']
+                            break
+            
+            if final_url:
+                duration = data.get('duration', 0)
+                # Seconds to Min:Sec conversion
+                mins, secs = divmod(duration, 60)
+                duration_str = f"{int(mins)}:{int(secs):02d}"
+                
+                return {
+                    "title": title,
+                    "url": final_url,
+                    "duration": duration_str
+                }, None
+                
+        except Exception as e:
+            print(f"Stream error on {instance}: {e}")
+            continue
+
+    return None, "Stream link nahi mila (All mirrors busy)."
 
 # ---------------------------------------------------------
 # 🚀 API ROUTES
 # ---------------------------------------------------------
 @app.route('/')
 def home():
-    return "🦅 AHMAD RDX - PIPED BYPASS API LIVE"
+    return "🦅 AHMAD RDX - PIPED PROXY ENGINE (NO YT-DLP)"
 
 @app.route('/music-dl')
 def music_dl():
@@ -87,34 +111,25 @@ def music_dl():
     
     if not query: return jsonify({"status": False, "msg": "Query missing!"})
 
+    # Data fetch via Piped API
+    data, error = get_piped_data(query, m_type)
+    
+    if not data:
+        return jsonify({"status": False, "msg": error})
+
     try:
-        # STEP 1: Search (Piped Servers se)
-        real_link, title = search_via_piped(query)
-        
-        if not real_link:
-            # Agar Piped bhi fail ho jaye, to aakhri koshish normal search
-            real_link = f"ytsearch1:{query}"
-            title = "Searching..."
-
-        # STEP 2: Extraction (yt-dlp se)
-        data = get_stream_data(real_link, m_type)
-        
-        # Agar Piped se title mila tha to wo use karo, warna yt-dlp wala
-        final_title = title if title != "YouTube Link" and title != "Searching..." else data['title']
-
         # Proxy Token
         token = base64.b64encode(data['url'].encode('ascii')).decode('ascii')
         
         return jsonify({
             "status": True,
-            "title": final_title,
+            "title": data['title'],
             "duration": data['duration'],
             "url": f"{request.host_url}proxy-dl?token={token}&type={m_type}"
         })
 
     except Exception as e:
-        # Agar yt-dlp fail ho jaye
-        return jsonify({"status": False, "error": str(e), "msg": "Download failed. Try another song."})
+        return jsonify({"status": False, "error": str(e)})
 
 @app.route('/proxy-dl')
 def proxy_dl():
@@ -124,6 +139,7 @@ def proxy_dl():
 
     try:
         target_url = base64.b64decode(token.encode('ascii')).decode('ascii')
+        # Piped ke liye headers simple rakhne hote hain
         headers = {"User-Agent": "Mozilla/5.0"}
 
         def generate():
@@ -140,4 +156,4 @@ def proxy_dl():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
-    
+                                  
