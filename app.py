@@ -7,90 +7,100 @@ import base64
 app = Flask(__name__)
 
 # ---------------------------------------------------------
-# 🛠️ YOUTUBE ANDROID ENGINE (Search & Download)
+# 🛡️ MIRROR SEARCH ENGINE (To Fix Empty List Error)
 # ---------------------------------------------------------
-def get_youtube_data(query, m_type):
-    # 1. Search Logic:
-    # Agar direct link hai to wahi use karo, warna "ytsearch1:" lagao
-    if query.startswith("http"):
-        search_query = query
-    else:
-        # "ytsearch1:" ka matlab hai pehla result uthao
-        search_query = f"ytsearch1:{query}"
+# Ye servers YouTube se search kar ke result la dete hain
+# Hum inhein bari bari try karenge taake empty error na aaye.
+SEARCH_INSTANCES = [
+    "https://inv.tux.rs",
+    "https://y.com.sb",
+    "https://invidious.nerdvpn.de",
+    "https://invidious.flokinet.to",
+    "https://invidious.projectsegfau.lt"
+]
 
-    # 2. Android Client Settings (Block Proof)
+def search_via_mirrors(query):
+    # Agar user ne direct link diya hai
+    if query.startswith("http"):
+        return query, "YouTube Link"
+
+    # Agar naam diya hai, to Mirrors par search karo
+    print(f"Searching for: {query}")
+    for instance in SEARCH_INSTANCES:
+        try:
+            # Invidious API Call
+            api_url = f"{instance}/api/v1/search?q={query}&type=video"
+            res = requests.get(api_url, timeout=6).json()
+            
+            # Agar result mil gaya
+            if res and len(res) > 0:
+                video_id = res[0]['videoId']
+                title = res[0]['title']
+                print(f"Found on {instance}: {title}")
+                return f"https://www.youtube.com/watch?v={video_id}", title
+        except:
+            continue # Next server try karo
+            
+    return None, None
+
+# ---------------------------------------------------------
+# 🛠️ DOWNLOADER (Android Mode)
+# ---------------------------------------------------------
+def get_stream_data(video_url, m_type):
     ydl_opts = {
         'format': 'bestaudio/best' if m_type == 'audio' else 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         'quiet': True,
-        'no_warnings': True,
         'geo_bypass': True,
         'nocheckcertificate': True,
-        # 🛡️ Ye setting bot ko "Samsung Android Phone" bana deti hai
+        # 📱 Mobile Client (Download ke liye best)
         'extractor_args': {
             'youtube': {
                 'player_client': ['android', 'ios'],
                 'player_skip': ['webpage', 'configs']
             }
-        },
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.162 Mobile Safari/537.36 YouTube/17.31.35'
         }
     }
     
-    # 3. Execution
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # Data extract karna
-            info = ydl.extract_info(search_query, download=False)
-            
-            # Agar Search results hon (playlist/search)
-            if 'entries' in info:
-                # Check agar list khali hai
-                if not info['entries']:
-                    return None, "Search results khali hain (Empty List)."
-                info = info['entries'][0]
-            
-            return {
-                "url": info.get('url'),
-                "title": info.get('title', 'Unknown Title'),
-                "duration": info.get('duration_string', '0:00')
-            }, None
-
-    except Exception as e:
-        # Asli error wapis bhejna
-        return None, str(e)
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(video_url, download=False)
+        return {
+            "url": info.get('url'),
+            "duration": info.get('duration_string', '0:00')
+        }
 
 # ---------------------------------------------------------
 # 🚀 API ROUTES
 # ---------------------------------------------------------
 @app.route('/')
 def home():
-    return "🦅 AHMAD RDX - ANDROID API LIVE"
+    return "🦅 AHMAD RDX - MIRROR SEARCH ENGINE LIVE"
 
 @app.route('/music-dl')
 def music_dl():
     query = request.args.get('q')
     m_type = request.args.get('type', default='audio')
     
-    if not query: return jsonify({"status": False, "msg": "Query missing!"})
-
-    # Data fetch karna
-    data, error_msg = get_youtube_data(query, m_type)
-    
-    if not data:
-        # Agar error aaye to user ko dikhana
-        return jsonify({
-            "status": False, 
-            "msg": f"Error: {error_msg}"
-        })
+    if not query: return jsonify({"status": False, "msg": "Likha hi kuch nahi!"})
 
     try:
+        # STEP 1: Search (Mirror se)
+        real_link, title = search_via_mirrors(query)
+        
+        if not real_link:
+            return jsonify({
+                "status": False, 
+                "msg": "Search fail ho gayi. Sare servers busy hain."
+            })
+
+        # STEP 2: Extraction (yt-dlp se)
+        data = get_stream_data(real_link, m_type)
+        
         # Proxy Token
         token = base64.b64encode(data['url'].encode('ascii')).decode('ascii')
         
         return jsonify({
             "status": True,
-            "title": data['title'],
+            "title": title,
             "duration": data['duration'],
             "url": f"{request.host_url}proxy-dl?token={token}&type={m_type}"
         })
