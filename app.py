@@ -1,80 +1,77 @@
 from flask import Flask, request, jsonify, Response
-from duckduckgo_search import DDGS
+from ytmusicapi import YTMusic
+import yt_dlp
 import requests
 import os
 import base64
 
 app = Flask(__name__)
+ytmusic = YTMusic()
 
 # ---------------------------------------------------------
-# 🚀 UNIVERSAL BYPASS ENGINE (Cobalt Logic)
+# 🛠️ MEDIA EXTRACTOR: YouTube Music Logic
 # ---------------------------------------------------------
-def get_media_url(video_url, m_type):
-    # Ye aik powerful downloader API hai jo block bypass karti hai
-    api_url = "https://api.cobalt.tools/api/json"
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json"
+def get_stream_data(video_id, m_type):
+    video_url = f"https://www.youtube.com/watch?v={video_id}"
+    
+    ydl_opts = {
+        'format': 'bestaudio/best' if m_type == 'audio' else 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'quiet': True,
+        'no_warnings': True,
+        'geo_bypass': True,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios'],
+                'player_skip': ['webpage', 'configs']
+            }
+        }
     }
     
-    # Audio ya Video selection
-    payload = {
-        "url": video_url,
-        "videoQuality": "720", # Video ke liye 720p
-        "downloadMode": "audio" if m_type == "audio" else "video",
-        "isAudioOnly": True if m_type == "audio" else False
-    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(video_url, download=False)
+        return info.get('url'), info.get('title', 'Media File')
 
-    try:
-        response = requests.post(api_url, headers=headers, json=payload, timeout=20)
-        data = response.json()
-        if data.get("status") == "stream" or data.get("status") == "redirect":
-            return data.get("url")
-        elif data.get("status") == "picker": # Agar multiple options milien
-            return data["picker"][0]["url"]
-        return None
-    except:
-        return None
-
-@app.route('/')
-def home():
-    return "🦅 AHMAD RDX - UNIVERSAL ENGINE v4 LIVE"
-
+# ---------------------------------------------------------
+# 🎵 MAIN API ENDPOINT
+# ---------------------------------------------------------
 @app.route('/music-dl')
 def music_dl():
     query = request.args.get('q')
     m_type = request.args.get('type', default='audio')
     
-    if not query: return jsonify({"status": False, "msg": "Query empty!"})
+    if not query:
+        return jsonify({"status": False, "msg": "Search query missing!"})
 
     try:
-        # 1. 🔎 Search (YouTube link nikalna DDG se)
-        with DDGS() as ddgs:
-            results = list(ddgs.videos(f"{query} site:youtube.com", max_results=1))
-            if not results:
-                return jsonify({"status": False, "msg": "Nahi mila! Name change karein."})
-            
-            video_url = results[0]['content']
-            title = results[0]['title']
-
-        # 2. ⚡ Get Stream via Universal Bypass
-        final_stream = get_media_url(video_url, m_type)
+        # 1. 🔎 Search directly on YouTube Music (Bypasses DuckDuckGo)
+        search_results = ytmusic.search(query, filter="songs")
         
-        if not final_stream:
-            return jsonify({"status": False, "msg": "Engine busy hai, dobara try karein."})
+        if not search_results:
+            return jsonify({"status": False, "msg": "No results found on YouTube Music."})
+        
+        # Extract the first result
+        video_id = search_results[0]['videoId']
+        title = search_results[0]['title']
+        artist = search_results[0]['artists'][0]['name'] if 'artists' in search_results[0] else "Unknown Artist"
 
+        # 2. ⚡ Get Stream Link
+        real_stream_url, official_title = get_stream_data(video_id, m_type)
+        
         # 3. 🛡️ Proxy Token (Safe Base64)
-        token = base64.b64encode(final_stream.encode('ascii')).decode('ascii')
+        token = base64.b64encode(real_stream_url.encode('ascii')).decode('ascii')
         
         return jsonify({
             "status": True,
-            "title": title,
+            "title": f"{title} - {artist}",
             "url": f"{request.host_url}proxy-dl?token={token}&type={m_type}"
         })
 
     except Exception as e:
         return jsonify({"status": False, "error": str(e)})
 
+# ---------------------------------------------------------
+# 🛡️ PROXY STREAMER
+# ---------------------------------------------------------
 @app.route('/proxy-dl')
 def proxy_dl():
     token = request.args.get('token')
@@ -83,7 +80,7 @@ def proxy_dl():
 
     try:
         target_url = base64.b64decode(token.encode('ascii')).decode('ascii')
-        headers = {"User-Agent": "Mozilla/5.0"}
+        headers = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0)"}
 
         def generate():
             with requests.get(target_url, headers=headers, stream=True, timeout=600) as r:
