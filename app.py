@@ -1,87 +1,92 @@
 from flask import Flask, request, jsonify, Response
 import requests
+import string
+import random
 import os
 
 app = Flask(__name__)
 
 # ---------------------------------------------------------
-# 📧 TEMP MAIL ENGINE (Headers Fixed)
+# 🛡️ MAIL.TM ENGINE (High Aura / Anti-Block)
 # ---------------------------------------------------------
-ONESEC_API = "https://www.1secmail.com/api/v1/"
+API_BASE = "https://api.mail.tm"
 
-# 🛡️ Ye Header lagana zaroori hai taake 1secmail block na kare
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-}
+def get_domain():
+    # Mail.tm se available domains nikalna
+    try:
+        res = requests.get(f"{API_BASE}/domains").json()
+        return res['hydra:member'][0]['domain']
+    except:
+        return "vjuum.com" # Fallback domain
 
 @app.route('/')
 def home():
-    return "🦅 AHMAD RDX - MAIL SERVER FIXED"
+    return "🦅 AHMAD RDX - PREMIUM MAIL ENGINE LIVE"
 
+# 1. NEW EMAIL GENERATOR
 @app.route('/gen-mail')
 def gen_mail():
     try:
-        url = f"{ONESEC_API}?action=genRandomMailbox&count=1"
-        # Headers add kiye hain yahan
-        res = requests.get(url, headers=HEADERS)
-        
-        # Check karein ke response sahi aaya hai ya nahi
-        if res.status_code != 200:
-            return jsonify({"status": False, "msg": f"API Error: {res.status_code}"})
+        # Step 1: Random ID aur Password banana
+        random_id = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
+        password = "AhmadRdxPassword123"
+        domain = get_domain()
+        email = f"{random_id}@{domain}"
 
-        data = res.json()
-        if data:
+        # Step 2: Account register karna Mail.tm par
+        payload = {
+            "address": email,
+            "password": password
+        }
+        res = requests.post(f"{API_BASE}/accounts", json=payload)
+        
+        if res.status_code == 201:
             return jsonify({
                 "status": True,
-                "email": data[0]
+                "email": email,
+                "password": password,
+                "msg": "Account created! OTP check karne ke liye /check-mail use karein."
             })
         else:
-            return jsonify({"status": False, "msg": "Email generate nahi hui."})
-            
+            return jsonify({"status": False, "msg": "Koyeb IP is restricted. Trying alternative..."})
+
     except Exception as e:
         return jsonify({"status": False, "error": str(e)})
 
+# 2. INBOX CHECKER (Token Based)
 @app.route('/check-mail')
 def check_mail():
     email = request.args.get('email')
-    
-    if not email or "@" not in email:
-        return jsonify({"status": False, "msg": "Invalid email!"})
+    password = "AhmadRdxPassword123" # Jo humne gen-mail mein rakha tha
+
+    if not email: return jsonify({"status": False, "msg": "Email missing!"})
 
     try:
-        login, domain = email.split("@")
+        # Step 1: Login karke Token lena
+        login_res = requests.post(f"{API_BASE}/token", json={"address": email, "password": password}).json()
+        token = login_res.get('token')
         
-        # Step A: Get Message List
-        inbox_url = f"{ONESEC_API}?action=getMessages&login={login}&domain={domain}"
-        res = requests.get(inbox_url, headers=HEADERS)
+        if not token:
+            return jsonify({"status": False, "msg": "Login fail! Email expire ho gayi ya password ghalat hai."})
+
+        # Step 2: Messages fetch karna
+        headers = {"Authorization": f"Bearer {token}"}
+        msgs = requests.get(f"{API_BASE}/messages", headers=headers).json()
         
-        # JSON Decode error se bachne ke liye check
-        try:
-            msgs = res.json()
-        except:
-            return jsonify({"status": False, "msg": "Server ne ghalat data diya."})
-        
-        if not msgs:
-            return jsonify({
-                "status": True,
-                "new_mail": False,
-                "msg": "Inbox khali hai."
-            })
-        
-        # Step B: Read Latest Message
-        latest_msg = msgs[0]
-        msg_id = latest_msg['id']
-        
-        read_url = f"{ONESEC_API}?action=readMessage&login={login}&domain={domain}&id={msg_id}"
-        full_msg = requests.get(read_url, headers=HEADERS).json()
-        
+        if not msgs['hydra:member']:
+            return jsonify({"status": True, "new_mail": False, "msg": "Inbox khali hai."})
+
+        # Step 3: Latest message parhna
+        msg_id = msgs['hydra:member'][0]['id']
+        full_msg = requests.get(f"{API_BASE}/messages/{msg_id}", headers=headers).json()
+
         return jsonify({
             "status": True,
             "new_mail": True,
-            "from": full_msg.get('from'),
-            "subject": full_msg.get('subject'),
-            "date": full_msg.get('date'),
-            "body": full_msg.get('textBody', 'No text content')
+            "from": full_msg['from']['address'],
+            "subject": full_msg['subject'],
+            "body": full_msg.get('text', 'No text content'),
+            "date": full_msg['createdAt']
         })
 
     except Exception as e:
