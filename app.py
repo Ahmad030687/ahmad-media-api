@@ -1,60 +1,76 @@
 from flask import Flask, request, jsonify, Response
+from ytmusicapi import YTMusic
 import yt_dlp
 import requests
 import os
 import base64
 
 app = Flask(__name__)
+ytmusic = YTMusic()
 
 # ---------------------------------------------------------
-# 🌍 UNIVERSAL ENGINE (Supports All Platforms)
+# 🛠️ YOUTUBE SPECIAL ENGINE
 # ---------------------------------------------------------
-def get_universal_data(query, m_type):
-    # 1. Logic: Agar Link nahi hai, to YouTube Search samjho
-    if not query.startswith("http"):
-        query = f"ytsearch1:{query}"
+def get_youtube_data(query, m_type):
+    video_id = ""
+    title = ""
+    duration = ""
 
-    # 2. Universal Options
+    # STEP 1: Search via YouTube Music API (Bypasses Block)
+    try:
+        if query.startswith("http"):
+            # Agar direct link hai
+            video_id = query.split("v=")[1].split("&")[0] if "v=" in query else query.split("/")[-1]
+            title = "YouTube Link"
+        else:
+            # Agar naam likha hai to Search karo
+            results = ytmusic.search(query, filter="songs")
+            if not results:
+                # Agar songs mein na mile to video search karo
+                results = ytmusic.search(query, filter="videos")
+            
+            if not results:
+                return None
+            
+            first_result = results[0]
+            video_id = first_result['videoId']
+            title = first_result['title']
+            # Artist ka naam bhi saath jornay ke liye
+            if 'artists' in first_result:
+                artist = first_result['artists'][0]['name']
+                title = f"{title} - {artist}"
+                
+    except Exception as e:
+        print(f"Search Error: {e}")
+        return None
+
+    # STEP 2: Extract Link via yt-dlp (Mobile Client)
+    video_url = f"https://www.youtube.com/watch?v={video_id}"
+    
     ydl_opts = {
-        'format': 'bestaudio/best' if m_type == 'audio' else 'best', # Universal format
+        'format': 'bestaudio/best' if m_type == 'audio' else 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         'quiet': True,
         'no_warnings': True,
         'geo_bypass': True,
         'nocheckcertificate': True,
-        # 📱 User Agent (Mobile ban kar request bhejna)
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
-        },
-        # 🛡️ Special Tweaks
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'ios'], # YouTube ke liye
+                'player_client': ['android', 'ios'],
                 'player_skip': ['webpage', 'configs']
-            },
-            'tiktok': {
-                'app_version': ['30.0.0'] # TikTok ke liye
             }
         }
     }
-    
-    # 3. Extraction
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(query, download=False)
-            
-            # Agar Search Results hon (YouTube)
-            if 'entries' in info:
-                if not info['entries']: return None
-                info = info['entries'][0]
-            
-            # Title aur URL nikalna
+            info = ydl.extract_info(video_url, download=False)
             return {
                 "url": info.get('url'),
-                "title": info.get('title', 'Social Media Video'),
-                "duration": info.get('duration_string', '')
+                "title": info.get('title', title),
+                "duration": info.get('duration_string', '0:00')
             }
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Extraction Error: {e}")
         return None
 
 # ---------------------------------------------------------
@@ -62,20 +78,20 @@ def get_universal_data(query, m_type):
 # ---------------------------------------------------------
 @app.route('/')
 def home():
-    return "🦅 AHMAD RDX - UNIVERSAL MEDIA API LIVE"
+    return "🦅 AHMAD RDX - YOUTUBE MUSIC API LIVE"
 
 @app.route('/music-dl')
 def music_dl():
     query = request.args.get('q')
     m_type = request.args.get('type', default='audio')
     
-    if not query: return jsonify({"status": False, "msg": "Link ya naam likhein!"})
+    if not query: return jsonify({"status": False, "msg": "Query missing!"})
 
     try:
-        data = get_universal_data(query, m_type)
+        data = get_youtube_data(query, m_type)
         
         if not data:
-            return jsonify({"status": False, "msg": "Media nahi mila ya Private hai."})
+            return jsonify({"status": False, "msg": "Gana nahi mila. Spelling check karein."})
 
         # Proxy Token
         token = base64.b64encode(data['url'].encode('ascii')).decode('ascii')
@@ -98,11 +114,7 @@ def proxy_dl():
 
     try:
         target_url = base64.b64decode(token.encode('ascii')).decode('ascii')
-        # Instagram/FB ke liye headers zaroori hote hain
-        headers = {
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
-            "Referer": "https://www.tiktok.com/" if "tiktok" in target_url else "https://www.instagram.com/"
-        }
+        headers = {"User-Agent": "Mozilla/5.0"}
 
         def generate():
             with requests.get(target_url, headers=headers, stream=True, timeout=600) as r:
@@ -118,3 +130,4 @@ def proxy_dl():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
+            
