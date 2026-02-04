@@ -2,121 +2,97 @@ from flask import Flask, request, jsonify, Response
 import requests
 import os
 import base64
-import random
+import re
 
 app = Flask(__name__)
 
-# ---------------------------------------------------------
-# ⚙️ SERVER LIST (Agar aik fail ho to dusra chalega)
-# ---------------------------------------------------------
-PIPED_INSTANCES = [
+# 🛡️ STABLE SERVERS LIST (Failover System)
+SERVERS = [
     "https://pipedapi.kavin.rocks",
-    "https://api.piped.privacy.com.de",
-    "https://pipedapi.drgns.space",
-    "https://api.piped.yt",
-    "https://piped-api.lunar.icu"
+    "https://api.piped.projectsegfau.lt",
+    "https://pipedapi.leptons.xyz",
+    "https://invidious.snopyta.org/api/v1"
 ]
 
 @app.route('/')
 def home():
-    return "🦅 AHMAD RDX - FAILOVER ENGINE LIVE"
+    return "🦅 AHMAD RDX - UNIVERSAL MEDIA ENGINE LIVE"
 
-# ---------------------------------------------------------
-# 🎵 SMART SEARCH (Multi-Server)
-# ---------------------------------------------------------
 @app.route('/music-dl')
 def music_dl():
     query = request.args.get('q')
-    media_type = request.args.get('type', default='audio')
+    m_type = request.args.get('type', 'audio')
     
-    if not query: return jsonify({"status": False, "msg": "Query missing"})
+    if not query: return jsonify({"status": False, "msg": "Query missing!"})
 
-    # Servers ko shuffle kar lete hain taake load balance ho jaye
-    instances = PIPED_INSTANCES.copy()
-    random.shuffle(instances)
-    
-    selected_instance = None
-    video_data = None
-    error_log = []
+    # 1. SEARCH PHASE (YouTube Search via Piped/Invidious)
+    video_id = None
+    title = "Media File"
 
-    # 🔄 LOOP: Har server ko check karna
-    for instance in instances:
+    for server in SERVERS:
         try:
-            # Step 1: Search Request
-            search_url = f"{instance}/search?q={query}&filter=all"
-            # Timeout kam rakha hai taake agar server slow ho to foran next par jaye
-            res = requests.get(search_url, timeout=5) 
+            search_url = f"{server}/search?q={query}&filter=all"
+            res = requests.get(search_url, timeout=10).json()
             
-            if res.status_code != 200: continue # Agar error aye to next try karo
-            
-            data = res.json()
-            if not data.get('items'): continue
+            # Piped Format
+            if 'items' in res and len(res['items']) > 0:
+                video_id = res['items'][0]['url'].split("=")[-1]
+                title = res['items'][0]['title']
+                break
+            # Invidious Format
+            elif isinstance(res, list) and len(res) > 0:
+                video_id = res[0]['videoId']
+                title = res[0]['title']
+                break
+        except:
+            continue
 
-            # Result mil gaya!
-            first_result = data['items'][0]
-            video_path = first_result['url'] # /watch?v=ID
-            video_id = video_path.replace("/watch?v=", "")
-            title = first_result['title']
+    if not video_id:
+        return jsonify({"status": False, "msg": "Saare servers busy hain. Thori dair baad try karein."})
+
+    # 2. STREAM PHASE (Extracting the real link)
+    final_url = ""
+    for server in SERVERS:
+        try:
+            stream_url = f"{server}/streams/{video_id}"
+            s_res = requests.get(stream_url, timeout=10).json()
             
-            # Step 2: Stream Link nikalna
-            stream_url = f"{instance}/streams/{video_id}"
-            stream_res = requests.get(stream_url, timeout=5)
-            
-            if stream_res.status_code != 200: continue
-            
-            stream_data = stream_res.json()
-            
-            final_url = ""
-            if media_type == "audio":
-                if stream_data.get('audioStreams'):
-                    final_url = stream_data['audioStreams'][0]['url']
+            if m_type == "audio":
+                if 'audioStreams' in s_res:
+                    final_url = s_res['audioStreams'][0]['url']
+                    break
             else:
-                # Video (720p prefer)
-                if stream_data.get('videoStreams'):
-                    for vid in stream_data['videoStreams']:
-                        if vid['format'] == 'mp4' and vid['quality'] == '720p':
-                            final_url = vid['url']
+                if 'videoStreams' in s_res:
+                    # Best mp4 dhundna
+                    for v in s_res['videoStreams']:
+                        if v['format'] == 'mp4':
+                            final_url = v['url']
                             break
-                    if not final_url and len(stream_data['videoStreams']) > 0:
-                        final_url = stream_data['videoStreams'][0]['url']
-            
-            if final_url:
-                selected_instance = instance # Kaam ban gaya
-                # Link ko Base64 mein pack karna
-                token = base64.b64encode(final_url.encode('ascii')).decode('ascii')
-                
-                return jsonify({
-                    "status": True,
-                    "server": instance, # Bata dega kis server ne kaam kiya
-                    "title": title,
-                    "url": f"{request.host_url}proxy-dl?token={token}&type={media_type}",
-                    "type": media_type
-                })
+                    if not final_url: final_url = s_res['videoStreams'][0]['url']
+                    break
+        except:
+            continue
 
-        except Exception as e:
-            error_log.append(f"{instance}: {str(e)}")
-            continue # Next server try karo
+    if not final_url:
+        return jsonify({"status": False, "msg": "Download link generate nahi ho saka."})
 
-    # Agar saare servers fail ho gaye
+    # 3. PROXY TOKEN
+    token = base64.b64encode(final_url.encode('ascii')).decode('ascii')
+    
     return jsonify({
-        "status": False, 
-        "msg": "All servers are busy. Try again later.",
-        "errors": error_log
+        "status": True,
+        "title": title,
+        "url": f"{request.host_url}proxy-dl?token={token}&type={m_type}"
     })
 
-# ---------------------------------------------------------
-# 🛡️ PROXY DOWNLOADER
-# ---------------------------------------------------------
 @app.route('/proxy-dl')
 def proxy_dl():
     token = request.args.get('token')
     m_type = request.args.get('type', 'audio')
-    
-    if not token: return Response("Token missing", status=400)
+    if not token: return Response("No token", status=400)
 
     try:
         target_url = base64.b64decode(token.encode('ascii')).decode('ascii')
-        
         headers = {"User-Agent": "Mozilla/5.0"}
 
         def generate():
@@ -127,9 +103,8 @@ def proxy_dl():
 
         c_type = "video/mp4" if m_type == "video" else "audio/mpeg"
         return Response(generate(), content_type=c_type)
-
     except Exception as e:
-        return Response(f"Proxy Error: {str(e)}", status=500)
+        return Response(str(e), status=500)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
