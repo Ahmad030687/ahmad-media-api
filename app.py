@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify, Response
-from duckduckgo_search import DDGS # Is se YouTube search block bypass hoga
+from duckduckgo_search import DDGS
 import yt_dlp
 import requests
 import os
@@ -8,52 +8,67 @@ import base64
 app = Flask(__name__)
 
 # ---------------------------------------------------------
-# 🛠️ HELPER: Mobile Stream Extractor
+# 🛠️ BYPASS ENGINE: Android VR & Embedded Clients
 # ---------------------------------------------------------
-def get_stream_link(video_url, m_type):
+def get_stream_data(video_url, m_type):
+    # Ye settings YouTube ki bot detection ko dhoka deti hain
     ydl_opts = {
         'format': 'bestaudio/best' if m_type == 'audio' else 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         'quiet': True,
         'no_warnings': True,
         'geo_bypass': True,
-        'extractor_args': {'youtube': {'player_client': ['android', 'ios']}}, # 📱 Mobile Bypass
+        'source_address': '0.0.0.0',
+        # 🛡️ Sabse important bypass settings
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android_vr', 'web_embedded', 'tvhtml5'],
+                'player_skip': ['webpage', 'configs']
+            }
+        },
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Quest 2) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/15.0.0.0.0 SamsungBrowser/4.0 Chrome/89.0.4389.90 Mobile Safari/537.36',
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Origin': 'https://www.youtube.com',
+            'Referer': 'https://www.youtube.com/'
+        }
     }
+    
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(video_url, download=False)
-        return info.get('url'), info.get('title', 'Media File')
+        return info.get('url'), info.get('title', 'Ahmad RDX Media'), info.get('duration_string', '0:00')
 
 # ---------------------------------------------------------
-# 🎵 MUSIC/VIDEO DOWNLOADER
+# 🎵 MAIN API ENDPOINT
 # ---------------------------------------------------------
 @app.route('/music-dl')
 def music_dl():
     query = request.args.get('q')
     m_type = request.args.get('type', default='audio')
     
-    if not query: return jsonify({"status": False, "msg": "Query missing!"})
+    if not query: return jsonify({"status": False, "msg": "Query empty!"})
 
     try:
-        # 1. 🔎 SEARCH PHASE (Using DuckDuckGo to find YouTube Link)
+        # 1. 🔎 Search via DuckDuckGo (YouTube search block bypass)
         with DDGS() as ddgs:
-            # Hum sirf YouTube ke results mangwa rahe hain
-            search_query = f"{query} site:youtube.com"
-            results = list(ddgs.videos(search_query, max_results=1))
+            # Hum sirf YouTube ke videos dhoond rahe hain
+            results = list(ddgs.videos(f"{query} site:youtube.com", max_results=1))
             
             if not results:
-                return jsonify({"status": False, "msg": "Nahi mila! Name change karein."})
+                return jsonify({"status": False, "msg": "Nahi mila! Thora sa naam badlein."})
             
-            video_url = results[0]['content'] # YouTube URL
-            title = results[0]['title']
+            video_url = results[0]['content']
 
-        # 2. ⚡ STREAM PHASE
-        real_stream_url, official_title = get_stream_link(video_url, m_type)
+        # 2. ⚡ Get Stream via Bypass Engine
+        real_stream_url, title, duration = get_stream_data(video_url, m_type)
         
-        # 3. 🛡️ PROXY TOKEN (Safe Base64)
+        # 3. 🛡️ Safe Token
         token = base64.b64encode(real_stream_url.encode('ascii')).decode('ascii')
         
         return jsonify({
             "status": True,
-            "title": official_title,
+            "title": title,
+            "duration": duration,
             "url": f"{request.host_url}proxy-dl?token={token}&type={m_type}"
         })
 
@@ -61,7 +76,7 @@ def music_dl():
         return jsonify({"status": False, "error": str(e)})
 
 # ---------------------------------------------------------
-# 🛡️ PROXY STREAMER
+# 🛡️ PROXY STREAMER (Actual Downloader)
 # ---------------------------------------------------------
 @app.route('/proxy-dl')
 def proxy_dl():
@@ -71,16 +86,17 @@ def proxy_dl():
 
     try:
         target_url = base64.b64decode(token.encode('ascii')).decode('ascii')
-        headers = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0)"}
+        headers = {"User-Agent": "Mozilla/5.0"}
 
         def generate():
+            # 1MB chunks mein data stream karna
             with requests.get(target_url, headers=headers, stream=True, timeout=600) as r:
                 r.raise_for_status()
                 for chunk in r.iter_content(chunk_size=1024 * 1024):
                     yield chunk
 
-        c_type = "video/mp4" if m_type == "video" else "audio/mpeg"
-        return Response(generate(), content_type=c_type)
+        content_type = "video/mp4" if m_type == "video" else "audio/mpeg"
+        return Response(generate(), content_type=content_type)
     except Exception as e:
         return Response(str(e), status=500)
 
