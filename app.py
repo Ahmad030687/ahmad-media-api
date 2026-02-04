@@ -1,82 +1,93 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, Response
 from pytubefix import YouTube
-import re
+import requests
 import os
-import shutil
+import base64
 
 app = Flask(__name__)
 
-# Downloads directory setup
-DOWNLOAD_PATH = os.path.join(os.getcwd(), "downloads")
-if not os.path.exists(DOWNLOAD_PATH):
-    os.makedirs(DOWNLOAD_PATH)
+# ---------------------------------------------------------
+# 🍪 COOKIES CONFIGURATION
+# ---------------------------------------------------------
+# Pytubefix mein cookies use karne ke liye 'cookies.txt' file 
+# usi folder mein honi chahiye jahan app.py hai.
+COOKIES_FILE = 'cookies.txt'
 
-def is_valid_youtube_url(url):
-    # Flexible regex for all types of YT links
-    pattern = r"^(https?://)?(www\.)?(youtube\.com|youtu\.be)/.+$"
-    return re.match(pattern, url) is not None
+def get_yt_instance(url):
+    # Agar cookies file mojud hai to use karein, warna bina cookies ke chalein
+    if os.path.exists(COOKIES_FILE):
+        return YouTube(url, cookies=COOKIES_FILE)
+    return YouTube(url)
 
-@app.route('/video_info', methods=['POST'])
-def video_info():
-    data = request.get_json()
-    url = data.get('url')
-    if not url or not is_valid_youtube_url(url):
-        return jsonify({"error": "Invalid or missing YouTube URL."}), 400
+@app.route('/')
+def home():
+    return "🦅 AHMAD RDX - PYTUBEFIX ENGINE (RENDER) LIVE"
+
+# ---------------------------------------------------------
+# 🎵 MUSIC/VIDEO INFO & LINK GENERATOR
+# ---------------------------------------------------------
+@app.route('/music-dl')
+def music_dl():
+    query_url = request.args.get('q') # Direct YouTube Link ya Search
+    m_type = request.args.get('type', default='audio')
     
+    if not query_url: return jsonify({"status": False, "msg": "Link missing!"})
+
     try:
-        yt = YouTube(url)
-        info = {
-            "title": yt.title,
-            "author": yt.author,
-            "length": yt.length,
-            "views": yt.views
-        }
-        return jsonify(info), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/download/<resolution>', methods=['POST'])
-def download_by_resolution(resolution):
-    data = request.get_json()
-    url = data.get('url')
-    
-    if not url or not is_valid_youtube_url(url):
-        return jsonify({"error": "Invalid YouTube URL."}), 400
-    
-    try:
-        yt = YouTube(url)
-        # Filter progressive mp4 streams
-        stream = yt.streams.filter(progressive=True, file_extension='mp4', resolution=resolution).first()
+        yt = get_yt_instance(query_url)
         
+        if m_type == 'audio':
+            stream = yt.streams.get_audio_only()
+        else:
+            stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
+
         if not stream:
-            return jsonify({"error": f"Resolution {resolution} available nahi hai."}), 404
+            return jsonify({"status": False, "msg": "Format available nahi hai."})
 
-        # Download file
-        file_name = f"video_{resolution}.mp4"
-        video_path = stream.download(output_path=DOWNLOAD_PATH, filename=file_name)
+        # Real stream link nikalna
+        real_url = stream.url
+        title = yt.title
         
-        # 🚀 CRUCIAL: File user/bot ko bhejna
-        return send_file(video_path, as_attachment=True)
+        # Safe Token (Base64)
+        token = base64.b64encode(real_url.encode('ascii')).decode('ascii')
+        
+        return jsonify({
+            "status": True,
+            "title": title,
+            "url": f"{request.host_url}proxy-dl?token={token}&type={m_type}"
+        })
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"status": False, "error": str(e)})
 
-@app.route('/available_resolutions', methods=['POST'])
-def available_resolutions():
-    data = request.get_json()
-    url = data.get('url')
-    if not url or not is_valid_youtube_url(url):
-        return jsonify({"error": "Invalid URL"}), 400
-    
+# ---------------------------------------------------------
+# 🛡️ PROXY STREAMER (Render IP Bypass)
+# ---------------------------------------------------------
+@app.route('/proxy-dl')
+def proxy_dl():
+    token = request.args.get('token')
+    if not token: return Response("No token", status=400)
+
     try:
-        yt = YouTube(url)
-        res = sorted(list(set([s.resolution for s in yt.streams.filter(progressive=True) if s.resolution])))
-        return jsonify({"progressive": res}), 200
+        target_url = base64.b64decode(token.encode('ascii')).decode('ascii')
+        
+        # YouTube headers bypass ke liye
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": "https://www.youtube.com/"
+        }
+
+        def generate():
+            with requests.get(target_url, headers=headers, stream=True, timeout=600) as r:
+                r.raise_for_status()
+                for chunk in r.iter_content(chunk_size=1024 * 1024):
+                    yield chunk
+
+        return Response(generate(), content_type="application/octet-stream")
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return Response(str(e), status=500)
 
 if __name__ == "__main__":
-    # Render ke liye host aur port settings
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
     
