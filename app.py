@@ -1,46 +1,23 @@
 from flask import Flask, request, jsonify, Response
 from duckduckgo_search import DDGS
-import yt_dlp
 import requests
 import os
 import base64
 
 app = Flask(__name__)
 
-# ---------------------------------------------------------
-# 🛠️ BYPASS ENGINE: Flexible Format Selection
-# ---------------------------------------------------------
-def get_stream_data(video_url, m_type):
-    # Flexible format logic: Agar best na mile to available uthao
-    if m_type == 'audio':
-        format_str = 'ba/b' # Best Audio / or any Audio
-    else:
-        format_str = 'bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b' # Best MP4 / or any MP4
+# 🛡️ STABLE INVIDIOUS INSTANCES (Backup list)
+INSTANCES = [
+    "https://invidious.snopyta.org",
+    "https://y.com.sb",
+    "https://invidious.nerdvpn.de",
+    "https://inv.tux.rs"
+]
 
-    ydl_opts = {
-        'format': format_str,
-        'quiet': True,
-        'no_warnings': True,
-        'geo_bypass': True,
-        # 🛡️ Multiple clients combination
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios', 'mweb'],
-                'player_skip': ['webpage', 'configs']
-            }
-        },
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-        }
-    }
-    
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(video_url, download=False)
-        return info.get('url'), info.get('title', 'Ahmad RDX Media'), info.get('duration_string', '0:00')
+@app.route('/')
+def home():
+    return "🦅 AHMAD RDX - ULTIMATE BYPASS ENGINE LIVE"
 
-# ---------------------------------------------------------
-# 🎵 MAIN API ENDPOINT
-# ---------------------------------------------------------
 @app.route('/music-dl')
 def music_dl():
     query = request.args.get('q')
@@ -49,35 +26,57 @@ def music_dl():
     if not query: return jsonify({"status": False, "msg": "Query empty!"})
 
     try:
-        # 1. 🔎 Search (DDG bypass)
+        # 1. 🔎 Search via DuckDuckGo (YouTube search block bypass)
+        video_id = ""
+        title = ""
         with DDGS() as ddgs:
             results = list(ddgs.videos(f"{query} site:youtube.com", max_results=1))
-            if not results:
-                return jsonify({"status": False, "msg": "Result nahi mila!"})
-            video_url = results[0]['content']
+            if results:
+                # YouTube URL se Video ID nikalna
+                video_url = results[0]['content']
+                video_id = video_url.split("v=")[1].split("&")[0] if "v=" in video_url else ""
+                title = results[0]['title']
 
-        # 2. ⚡ Get Stream
-        real_stream_url, title, duration = get_stream_data(video_url, m_type)
-        
-        if not real_stream_url:
-            return jsonify({"status": False, "msg": "Format available nahi hai."})
+        if not video_id:
+            return jsonify({"status": False, "msg": "Gana nahi mila!"})
 
-        # 3. 🛡️ Safe Token
-        token = base64.b64encode(real_stream_url.encode('ascii')).decode('ascii')
+        # 2. ⚡ Get Stream Link via Invidious (Bypass Sign-in)
+        stream_url = ""
+        for instance in INSTANCES:
+            try:
+                api_url = f"{instance}/api/v1/videos/{video_id}"
+                data = requests.get(api_url, timeout=10).json()
+                
+                if m_type == 'audio':
+                    # Best Audio Stream dhundna
+                    if 'adaptiveFormats' in data:
+                        audios = [f for f in data['adaptiveFormats'] if 'audio/' in f['type']]
+                        if audios:
+                            stream_url = audios[0]['url']
+                            break
+                else:
+                    # Best Video Stream dhundna
+                    if 'formatStreams' in data:
+                        stream_url = data['formatStreams'][0]['url']
+                        break
+            except:
+                continue # Agar aik instance down ho to dusri try karein
+
+        if not stream_url:
+            return jsonify({"status": False, "msg": "Stream link block hai ya busy hai."})
+
+        # 3. 🛡️ Safe Token (Base64)
+        token = base64.b64encode(stream_url.encode('ascii')).decode('ascii')
         
         return jsonify({
             "status": True,
             "title": title,
-            "duration": duration,
             "url": f"{request.host_url}proxy-dl?token={token}&type={m_type}"
         })
 
     except Exception as e:
         return jsonify({"status": False, "error": str(e)})
 
-# ---------------------------------------------------------
-# 🛡️ PROXY STREAMER
-# ---------------------------------------------------------
 @app.route('/proxy-dl')
 def proxy_dl():
     token = request.args.get('token')
