@@ -1,5 +1,4 @@
 from flask import Flask, request, jsonify, Response
-from youtubesearchpython import VideosSearch
 import yt_dlp
 import requests
 import os
@@ -8,30 +7,45 @@ import base64
 app = Flask(__name__)
 
 # ---------------------------------------------------------
-# 🕵️ SPECIALIST SEARCH ENGINE (No Blocks)
+# 🌍 PIPED API SERVERS (Search Bypass)
 # ---------------------------------------------------------
-def search_video(query):
-    try:
-        # Agar user ne direct link diya hai
-        if query.startswith("http"):
-            return query, "YouTube Link"
+# Ye servers YouTube search karke Video ID dete hain.
+# Hum Koyeb ki IP se search nahi karenge, in se karwayenge.
+PIPED_INSTANCES = [
+    "https://pipedapi.kavin.rocks",
+    "https://api.piped.ot.ax",
+    "https://pipedapi.drgns.space",
+    "https://pa.il.ax",
+    "https://api.piped.projectsegfau.lt"
+]
 
-        # Dedicated Library se Search (Ye yt-dlp nahi hai)
-        print(f"Searching via Specialist: {query}")
-        videos_search = VideosSearch(query, limit=1)
-        results = videos_search.result()
+def search_via_piped(query):
+    # Agar direct link hai
+    if query.startswith("http"):
+        return query, "YouTube Link"
 
-        if results and 'result' in results and len(results['result']) > 0:
-            top_result = results['result'][0]
-            video_link = top_result['link']
-            title = top_result['title']
-            print(f"Found: {title}")
-            return video_link, title
-        
-        return None, None
-    except Exception as e:
-        print(f"Search Error: {e}")
-        return None, None
+    print(f"Searching via Piped: {query}")
+    
+    # Har server ko bari bari try karo
+    for api_url in PIPED_INSTANCES:
+        try:
+            # Piped Search API Call
+            search_url = f"{api_url}/search?q={query}&filter=music_songs"
+            res = requests.get(search_url, timeout=5).json()
+            
+            # Agar items milein
+            if 'items' in res and len(res['items']) > 0:
+                # Pehla result uthao
+                first_video = res['items'][0]
+                video_url = f"https://www.youtube.com/watch?v={first_video['url'].split('/watch?v=')[1]}"
+                title = first_video['title']
+                print(f"Found on {api_url}: {title}")
+                return video_url, title
+        except Exception as e:
+            print(f"Server {api_url} failed: {e}")
+            continue # Agla server try karo
+            
+    return None, None
 
 # ---------------------------------------------------------
 # 🛠️ DOWNLOAD ENGINE (Android Mode)
@@ -42,7 +56,7 @@ def get_stream_data(video_url, m_type):
         'quiet': True,
         'geo_bypass': True,
         'nocheckcertificate': True,
-        # 🛡️ Sirf Download ke liye Android banenge
+        # 📱 Android Client (Download ke liye best)
         'extractor_args': {
             'youtube': {
                 'player_client': ['android', 'ios'],
@@ -64,7 +78,7 @@ def get_stream_data(video_url, m_type):
 # ---------------------------------------------------------
 @app.route('/')
 def home():
-    return "🦅 AHMAD RDX - SPECIALIST SEARCH API LIVE"
+    return "🦅 AHMAD RDX - PIPED BYPASS API LIVE"
 
 @app.route('/music-dl')
 def music_dl():
@@ -74,33 +88,33 @@ def music_dl():
     if not query: return jsonify({"status": False, "msg": "Query missing!"})
 
     try:
-        # STEP 1: Search (Via youtube-search-python)
-        real_link, title = search_video(query)
+        # STEP 1: Search (Piped Servers se)
+        real_link, title = search_via_piped(query)
         
         if not real_link:
-            return jsonify({
-                "status": False, 
-                "msg": "Search fail. Koi result nahi mila."
-            })
+            # Agar Piped bhi fail ho jaye, to aakhri koshish normal search
+            real_link = f"ytsearch1:{query}"
+            title = "Searching..."
 
-        # STEP 2: Extraction (Via yt-dlp)
-        # Agar title pehle nahi mila to yahan update ho jayega
+        # STEP 2: Extraction (yt-dlp se)
         data = get_stream_data(real_link, m_type)
-        if title == "YouTube Link":
-            title = data['title']
+        
+        # Agar Piped se title mila tha to wo use karo, warna yt-dlp wala
+        final_title = title if title != "YouTube Link" and title != "Searching..." else data['title']
 
         # Proxy Token
         token = base64.b64encode(data['url'].encode('ascii')).decode('ascii')
         
         return jsonify({
             "status": True,
-            "title": title,
+            "title": final_title,
             "duration": data['duration'],
             "url": f"{request.host_url}proxy-dl?token={token}&type={m_type}"
         })
 
     except Exception as e:
-        return jsonify({"status": False, "error": str(e)})
+        # Agar yt-dlp fail ho jaye
+        return jsonify({"status": False, "error": str(e), "msg": "Download failed. Try another song."})
 
 @app.route('/proxy-dl')
 def proxy_dl():
@@ -126,4 +140,4 @@ def proxy_dl():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
-                
+    
