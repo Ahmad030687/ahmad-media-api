@@ -7,23 +7,27 @@ import base64
 app = Flask(__name__)
 
 # ---------------------------------------------------------
-# 🛠️ HELPER: YouTube Bypass Settings
+# 🍪 COOKIES & BYPASS CONFIGURATION
 # ---------------------------------------------------------
 def get_ydl_opts(media_type):
-    # Audio ya Video ke liye format chunn-na
-    if media_type == 'audio':
-        format_sel = 'bestaudio/best'
-    else:
+    cookie_path = 'cookies.txt'
+    
+    # Audio ya Video quality selection
+    if media_type == 'video':
         format_sel = 'bestvideo+bestaudio/best'
+    else:
+        format_sel = 'bestaudio/best'
 
-    return {
+    opts = {
         'format': format_sel,
         'quiet': True,
         'no_warnings': True,
         'default_search': 'ytsearch1',
         'noplaylist': True,
         'geo_bypass': True,
-        # 📱 Mobile App Clients (YouTube bypass karne ka raaz)
+        # Cookies file check
+        'cookiefile': cookie_path if os.path.exists(cookie_path) else None,
+        # Mobile clients bypass ke liye behtareen hain
         'extractor_args': {
             'youtube': {
                 'player_client': ['android', 'ios'],
@@ -31,21 +35,20 @@ def get_ydl_opts(media_type):
             }
         },
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-us',
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
         }
     }
+    return opts
 
 # ---------------------------------------------------------
-# 🏠 Home Route
+# 🏠 HOME ROUTE
 # ---------------------------------------------------------
 @app.route('/')
 def home():
-    return "🦅 AHMAD RDX MEDIA ENGINE v2 - BYPASS ACTIVE"
+    return "🦅 MEDIA ENGINE v3 (COOKIES ACTIVE) - LIVE"
 
 # ---------------------------------------------------------
-# 🎵 Search & Link Generator
+# 🎵 SEARCH & DATA EXTRACTOR
 # ---------------------------------------------------------
 @app.route('/music-dl')
 def music_dl():
@@ -58,16 +61,19 @@ def music_dl():
     try:
         ydl_opts = get_ydl_opts(media_type)
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # YouTube se data nikalna
+            # YouTube search
             info = ydl.extract_info(query, download=False)
-            if 'entries' in info:
-                info = info['entries'][0]
             
-            real_url = info.get('url')
-            title = info.get('title', 'Media File')
-            duration = info.get('duration_string', '0:00')
+            # Agar results na milien toh "List index out of range" se bachne ke liye check
+            if not info or 'entries' not in info or len(info['entries']) == 0:
+                return jsonify({"status": False, "msg": "Nahi mila! Name thora change kar ke dekhein."})
             
-            # Link ko safe karne ke liye Base64 use kar rahe hain
+            video_data = info['entries'][0]
+            real_url = video_data.get('url')
+            title = video_data.get('title', 'Media File')
+            duration = video_data.get('duration_string', '0:00')
+            
+            # Link ko Base64 mein convert karna taake URL break na ho
             token = base64.b64encode(real_url.encode('ascii')).decode('ascii')
             
             return jsonify({
@@ -82,7 +88,7 @@ def music_dl():
         return jsonify({"status": False, "error": str(e)})
 
 # ---------------------------------------------------------
-# 🛡️ Proxy Engine (Actual Download Stream)
+# 🛡️ PROXY STREAMER (Bypass Direct Link Block)
 # ---------------------------------------------------------
 @app.route('/proxy-dl')
 def proxy_dl():
@@ -93,7 +99,7 @@ def proxy_dl():
         return Response("Token missing!", status=400)
 
     try:
-        # Link ko wapis decode karna
+        # Link ko wapis asli halat mein lana
         target_url = base64.b64decode(token.encode('ascii')).decode('ascii')
         
         headers = {
@@ -101,11 +107,11 @@ def proxy_dl():
             "Referer": "https://www.youtube.com/"
         }
 
-        # Chunk by chunk data bhejenge taake RAM crash na ho
+        # Streaming function taake bari files RAM crash na karein
         def generate():
             with requests.get(target_url, headers=headers, stream=True, timeout=600) as r:
                 r.raise_for_status()
-                for chunk in r.iter_content(chunk_size=1024 * 1024): # 1MB chunks
+                for chunk in r.iter_content(chunk_size=1024 * 1024): # 1MB segments
                     yield chunk
 
         content_type = "video/mp4" if m_type == "video" else "audio/mpeg"
@@ -115,7 +121,7 @@ def proxy_dl():
         return Response(f"Stream Error: {str(e)}", status=500)
 
 if __name__ == "__main__":
-    # Render Port settings
+    # Render Port
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
-    
+        
