@@ -1,108 +1,97 @@
 from flask import Flask, request, jsonify, Response
 import requests
+import re
 import os
 import base64
+import random
 
 app = Flask(__name__)
 
 # ---------------------------------------------------------
-# 🌍 PUBLIC PIPED INSTANCES (High Speed & No Block)
+# 🦆 DUCKDUCKGO SEARCH (Bypass YouTube Block)
 # ---------------------------------------------------------
-# Hum bari bari in servers se data mangenge
-INSTANCES = [
-    "https://pipedapi.kavin.rocks",
-    "https://api.piped.ot.ax",
-    "https://pipedapi.drgns.space",
-    "https://pa.il.ax",
-    "https://api.piped.projectsegfau.lt"
-]
-
-def get_piped_data(query, m_type):
-    # 1. SEARCH PHASE
-    video_id = ""
-    title = ""
-    used_instance = ""
-
+def search_via_ddg(query):
     # Agar direct link hai
     if "youtube.com" in query or "youtu.be" in query:
-        if "v=" in query:
-            video_id = query.split("v=")[1].split("&")[0]
-        else:
-            video_id = query.split("/")[-1]
-        title = "YouTube Link"
-    
-    # Agar search karna hai
-    else:
-        for instance in INSTANCES:
-            try:
-                print(f"Searching on: {instance}")
-                search_url = f"{instance}/search?q={query}&filter=music_songs"
-                res = requests.get(search_url, timeout=4).json()
-                if 'items' in res and res['items']:
-                    video_id = res['items'][0]['url'].split("/watch?v=")[1]
-                    title = res['items'][0]['title']
-                    used_instance = instance # Jo server chala, usi se download bhi karenge
-                    break
-            except:
-                continue
-    
-    if not video_id:
-        return None, "Search failed on all servers."
+        return query, "YouTube Link"
 
-    # 2. STREAM EXTRACTION PHASE (Without yt-dlp)
-    # Hum usi instance se stream link mangenge
-    target_instances = [used_instance] if used_instance else INSTANCES
+    try:
+        # DuckDuckGo HTML search (Bohat halka aur fast)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+        # Hum specifically youtube.com site search kar rahe hain
+        ddg_url = f"https://html.duckduckgo.com/html/?q={query}+site:youtube.com"
+        
+        res = requests.get(ddg_url, headers=headers, timeout=10).text
+        
+        # Regex se pehla YouTube link nikalna
+        # Ye pattern dhoondta hai: watch?v=VIDEO_ID
+        video_ids = re.findall(r'watch\?v=([a-zA-Z0-9_-]{11})', res)
+        
+        if video_ids:
+            # Pehla result
+            video_id = video_ids[0]
+            print(f"DuckDuckGo found ID: {video_id}")
+            return f"https://www.youtube.com/watch?v={video_id}", "Media Found"
+            
+    except Exception as e:
+        print(f"DDG Error: {e}")
     
-    for instance in target_instances:
+    return None, None
+
+# ---------------------------------------------------------
+# ⚙️ COBALT API (The Ultimate Downloader)
+# ---------------------------------------------------------
+# Cobalt ke multiple instances taake agar aik down ho to doosra chale
+COBALT_INSTANCES = [
+    "https://api.cobalt.tools",
+    "https://cobalt.kn1.us",
+    "https://cobalt.q14.pw",
+    "https://cobalt.kwiatekmiki.pl"
+]
+
+def get_cobalt_stream(url, m_type):
+    # Data prepare karna
+    payload = {
+        "url": url,
+        "videoQuality": "720",
+        "audioFormat": "mp3",
+        "isAudioOnly": (m_type == 'audio')
+    }
+    
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Compatible; AhmadBot/1.0)"
+    }
+
+    # Servers try karna
+    for instance in COBALT_INSTANCES:
         try:
-            stream_url = f"{instance}/streams/{video_id}"
-            data = requests.get(stream_url, timeout=4).json()
+            print(f"Trying Cobalt: {instance}")
+            api_url = f"{instance}/api/json"
+            res = requests.post(api_url, json=payload, headers=headers, timeout=10).json()
             
-            # Title update agar pehle nahi mila
-            if title == "YouTube Link":
-                title = data.get('title', 'Unknown Media')
-
-            # Audio ya Video link nikaalna
-            final_url = ""
-            if m_type == 'audio':
-                # Sabse best audio stream dhoondo
-                audio_streams = data.get('audioStreams', [])
-                if audio_streams:
-                    final_url = audio_streams[0]['url'] # Best quality usually first
-            else:
-                # Video stream
-                video_streams = data.get('videoStreams', [])
-                if video_streams:
-                    # Video with sound dhoondna
-                    for v in video_streams:
-                        if v.get('videoOnly') == False:
-                            final_url = v['url']
-                            break
-            
-            if final_url:
-                duration = data.get('duration', 0)
-                # Seconds to Min:Sec conversion
-                mins, secs = divmod(duration, 60)
-                duration_str = f"{int(mins)}:{int(secs):02d}"
-                
+            # Agar success ho
+            if 'url' in res:
                 return {
-                    "title": title,
-                    "url": final_url,
-                    "duration": duration_str
-                }, None
-                
+                    "url": res['url'],
+                    "title": "Cobalt Media", # Cobalt aksar title nahi deta, par link pakka deta hai
+                    "duration": "0:00"
+                }
         except Exception as e:
-            print(f"Stream error on {instance}: {e}")
+            print(f"Cobalt {instance} failed: {e}")
             continue
 
-    return None, "Stream link nahi mila (All mirrors busy)."
+    return None
 
 # ---------------------------------------------------------
 # 🚀 API ROUTES
 # ---------------------------------------------------------
 @app.route('/')
 def home():
-    return "🦅 AHMAD RDX - PIPED PROXY ENGINE (NO YT-DLP)"
+    return "🦅 AHMAD RDX - COBALT HYBRID ENGINE LIVE"
 
 @app.route('/music-dl')
 def music_dl():
@@ -111,19 +100,31 @@ def music_dl():
     
     if not query: return jsonify({"status": False, "msg": "Query missing!"})
 
-    # Data fetch via Piped API
-    data, error = get_piped_data(query, m_type)
-    
-    if not data:
-        return jsonify({"status": False, "msg": error})
-
     try:
+        # STEP 1: Search (DuckDuckGo se)
+        real_link, title_hint = search_via_ddg(query)
+        
+        if not real_link:
+            return jsonify({
+                "status": False, 
+                "msg": "Search fail. DuckDuckGo ne result nahi diya."
+            })
+
+        # STEP 2: Extraction (Cobalt API se)
+        data = get_cobalt_stream(real_link, m_type)
+        
+        if not data:
+            return jsonify({
+                "status": False,
+                "msg": "Download fail. Cobalt servers busy hain."
+            })
+
         # Proxy Token
         token = base64.b64encode(data['url'].encode('ascii')).decode('ascii')
         
         return jsonify({
             "status": True,
-            "title": data['title'],
+            "title": data['title'], # Note: Cobalt shayad title generic de
             "duration": data['duration'],
             "url": f"{request.host_url}proxy-dl?token={token}&type={m_type}"
         })
@@ -139,7 +140,6 @@ def proxy_dl():
 
     try:
         target_url = base64.b64decode(token.encode('ascii')).decode('ascii')
-        # Piped ke liye headers simple rakhne hote hain
         headers = {"User-Agent": "Mozilla/5.0"}
 
         def generate():
@@ -156,4 +156,4 @@ def proxy_dl():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
-                                  
+    
