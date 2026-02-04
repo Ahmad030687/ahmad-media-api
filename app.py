@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify, Response
+from youtubesearchpython import VideosSearch
 import yt_dlp
 import requests
 import os
@@ -7,44 +8,33 @@ import base64
 app = Flask(__name__)
 
 # ---------------------------------------------------------
-# 🛡️ MIRROR SEARCH ENGINE (To Fix Empty List Error)
+# 🕵️ SPECIALIST SEARCH ENGINE (No Blocks)
 # ---------------------------------------------------------
-# Ye servers YouTube se search kar ke result la dete hain
-# Hum inhein bari bari try karenge taake empty error na aaye.
-SEARCH_INSTANCES = [
-    "https://inv.tux.rs",
-    "https://y.com.sb",
-    "https://invidious.nerdvpn.de",
-    "https://invidious.flokinet.to",
-    "https://invidious.projectsegfau.lt"
-]
+def search_video(query):
+    try:
+        # Agar user ne direct link diya hai
+        if query.startswith("http"):
+            return query, "YouTube Link"
 
-def search_via_mirrors(query):
-    # Agar user ne direct link diya hai
-    if query.startswith("http"):
-        return query, "YouTube Link"
+        # Dedicated Library se Search (Ye yt-dlp nahi hai)
+        print(f"Searching via Specialist: {query}")
+        videos_search = VideosSearch(query, limit=1)
+        results = videos_search.result()
 
-    # Agar naam diya hai, to Mirrors par search karo
-    print(f"Searching for: {query}")
-    for instance in SEARCH_INSTANCES:
-        try:
-            # Invidious API Call
-            api_url = f"{instance}/api/v1/search?q={query}&type=video"
-            res = requests.get(api_url, timeout=6).json()
-            
-            # Agar result mil gaya
-            if res and len(res) > 0:
-                video_id = res[0]['videoId']
-                title = res[0]['title']
-                print(f"Found on {instance}: {title}")
-                return f"https://www.youtube.com/watch?v={video_id}", title
-        except:
-            continue # Next server try karo
-            
-    return None, None
+        if results and 'result' in results and len(results['result']) > 0:
+            top_result = results['result'][0]
+            video_link = top_result['link']
+            title = top_result['title']
+            print(f"Found: {title}")
+            return video_link, title
+        
+        return None, None
+    except Exception as e:
+        print(f"Search Error: {e}")
+        return None, None
 
 # ---------------------------------------------------------
-# 🛠️ DOWNLOADER (Android Mode)
+# 🛠️ DOWNLOAD ENGINE (Android Mode)
 # ---------------------------------------------------------
 def get_stream_data(video_url, m_type):
     ydl_opts = {
@@ -52,7 +42,7 @@ def get_stream_data(video_url, m_type):
         'quiet': True,
         'geo_bypass': True,
         'nocheckcertificate': True,
-        # 📱 Mobile Client (Download ke liye best)
+        # 🛡️ Sirf Download ke liye Android banenge
         'extractor_args': {
             'youtube': {
                 'player_client': ['android', 'ios'],
@@ -65,6 +55,7 @@ def get_stream_data(video_url, m_type):
         info = ydl.extract_info(video_url, download=False)
         return {
             "url": info.get('url'),
+            "title": info.get('title', 'Media File'),
             "duration": info.get('duration_string', '0:00')
         }
 
@@ -73,28 +64,31 @@ def get_stream_data(video_url, m_type):
 # ---------------------------------------------------------
 @app.route('/')
 def home():
-    return "🦅 AHMAD RDX - MIRROR SEARCH ENGINE LIVE"
+    return "🦅 AHMAD RDX - SPECIALIST SEARCH API LIVE"
 
 @app.route('/music-dl')
 def music_dl():
     query = request.args.get('q')
     m_type = request.args.get('type', default='audio')
     
-    if not query: return jsonify({"status": False, "msg": "Likha hi kuch nahi!"})
+    if not query: return jsonify({"status": False, "msg": "Query missing!"})
 
     try:
-        # STEP 1: Search (Mirror se)
-        real_link, title = search_via_mirrors(query)
+        # STEP 1: Search (Via youtube-search-python)
+        real_link, title = search_video(query)
         
         if not real_link:
             return jsonify({
                 "status": False, 
-                "msg": "Search fail ho gayi. Sare servers busy hain."
+                "msg": "Search fail. Koi result nahi mila."
             })
 
-        # STEP 2: Extraction (yt-dlp se)
+        # STEP 2: Extraction (Via yt-dlp)
+        # Agar title pehle nahi mila to yahan update ho jayega
         data = get_stream_data(real_link, m_type)
-        
+        if title == "YouTube Link":
+            title = data['title']
+
         # Proxy Token
         token = base64.b64encode(data['url'].encode('ascii')).decode('ascii')
         
@@ -132,4 +126,4 @@ def proxy_dl():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
-    
+                
