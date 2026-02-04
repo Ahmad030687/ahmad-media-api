@@ -1,90 +1,68 @@
 from flask import Flask, request, jsonify, Response
+from duckduckgo_search import DDGS # Is se YouTube search block bypass hoga
+import yt_dlp
 import requests
 import os
 import base64
-import re
 
 app = Flask(__name__)
 
-# 🛡️ STABLE SERVERS LIST (Failover System)
-SERVERS = [
-    "https://pipedapi.kavin.rocks",
-    "https://api.piped.projectsegfau.lt",
-    "https://pipedapi.leptons.xyz",
-    "https://invidious.snopyta.org/api/v1"
-]
+# ---------------------------------------------------------
+# 🛠️ HELPER: Mobile Stream Extractor
+# ---------------------------------------------------------
+def get_stream_link(video_url, m_type):
+    ydl_opts = {
+        'format': 'bestaudio/best' if m_type == 'audio' else 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'quiet': True,
+        'no_warnings': True,
+        'geo_bypass': True,
+        'extractor_args': {'youtube': {'player_client': ['android', 'ios']}}, # 📱 Mobile Bypass
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(video_url, download=False)
+        return info.get('url'), info.get('title', 'Media File')
 
-@app.route('/')
-def home():
-    return "🦅 AHMAD RDX - UNIVERSAL MEDIA ENGINE LIVE"
-
+# ---------------------------------------------------------
+# 🎵 MUSIC/VIDEO DOWNLOADER
+# ---------------------------------------------------------
 @app.route('/music-dl')
 def music_dl():
     query = request.args.get('q')
-    m_type = request.args.get('type', 'audio')
+    m_type = request.args.get('type', default='audio')
     
     if not query: return jsonify({"status": False, "msg": "Query missing!"})
 
-    # 1. SEARCH PHASE (YouTube Search via Piped/Invidious)
-    video_id = None
-    title = "Media File"
-
-    for server in SERVERS:
-        try:
-            search_url = f"{server}/search?q={query}&filter=all"
-            res = requests.get(search_url, timeout=10).json()
+    try:
+        # 1. 🔎 SEARCH PHASE (Using DuckDuckGo to find YouTube Link)
+        with DDGS() as ddgs:
+            # Hum sirf YouTube ke results mangwa rahe hain
+            search_query = f"{query} site:youtube.com"
+            results = list(ddgs.videos(search_query, max_results=1))
             
-            # Piped Format
-            if 'items' in res and len(res['items']) > 0:
-                video_id = res['items'][0]['url'].split("=")[-1]
-                title = res['items'][0]['title']
-                break
-            # Invidious Format
-            elif isinstance(res, list) and len(res) > 0:
-                video_id = res[0]['videoId']
-                title = res[0]['title']
-                break
-        except:
-            continue
-
-    if not video_id:
-        return jsonify({"status": False, "msg": "Saare servers busy hain. Thori dair baad try karein."})
-
-    # 2. STREAM PHASE (Extracting the real link)
-    final_url = ""
-    for server in SERVERS:
-        try:
-            stream_url = f"{server}/streams/{video_id}"
-            s_res = requests.get(stream_url, timeout=10).json()
+            if not results:
+                return jsonify({"status": False, "msg": "Nahi mila! Name change karein."})
             
-            if m_type == "audio":
-                if 'audioStreams' in s_res:
-                    final_url = s_res['audioStreams'][0]['url']
-                    break
-            else:
-                if 'videoStreams' in s_res:
-                    # Best mp4 dhundna
-                    for v in s_res['videoStreams']:
-                        if v['format'] == 'mp4':
-                            final_url = v['url']
-                            break
-                    if not final_url: final_url = s_res['videoStreams'][0]['url']
-                    break
-        except:
-            continue
+            video_url = results[0]['content'] # YouTube URL
+            title = results[0]['title']
 
-    if not final_url:
-        return jsonify({"status": False, "msg": "Download link generate nahi ho saka."})
+        # 2. ⚡ STREAM PHASE
+        real_stream_url, official_title = get_stream_link(video_url, m_type)
+        
+        # 3. 🛡️ PROXY TOKEN (Safe Base64)
+        token = base64.b64encode(real_stream_url.encode('ascii')).decode('ascii')
+        
+        return jsonify({
+            "status": True,
+            "title": official_title,
+            "url": f"{request.host_url}proxy-dl?token={token}&type={m_type}"
+        })
 
-    # 3. PROXY TOKEN
-    token = base64.b64encode(final_url.encode('ascii')).decode('ascii')
-    
-    return jsonify({
-        "status": True,
-        "title": title,
-        "url": f"{request.host_url}proxy-dl?token={token}&type={m_type}"
-    })
+    except Exception as e:
+        return jsonify({"status": False, "error": str(e)})
 
+# ---------------------------------------------------------
+# 🛡️ PROXY STREAMER
+# ---------------------------------------------------------
 @app.route('/proxy-dl')
 def proxy_dl():
     token = request.args.get('token')
@@ -93,7 +71,7 @@ def proxy_dl():
 
     try:
         target_url = base64.b64decode(token.encode('ascii')).decode('ascii')
-        headers = {"User-Agent": "Mozilla/5.0"}
+        headers = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0)"}
 
         def generate():
             with requests.get(target_url, headers=headers, stream=True, timeout=600) as r:
