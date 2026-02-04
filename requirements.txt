@@ -5,3 +5,4 @@ gunicorn
 duckduckgo_search
 ytmusicapi
 pytubefix
+youtube-search-python
